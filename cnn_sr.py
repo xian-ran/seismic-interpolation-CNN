@@ -43,7 +43,7 @@ def he_init(size, stride):
     return tf.random_uniform(shape=size, minval=minval, maxval=maxval)
 
 
-class SR(object):
+class ResNet(object):
     def __init__(self, img_shape, batch_size, learning_rate):
         self.height = img_shape[0]
         self.width = img_shape[1]
@@ -284,7 +284,7 @@ if __name__ == '__main__':
 
     data = sio.loadmat('volume.mat')['volume']
 
-    g = SR([106, 106, 1], batch_size, learning_rate)
+    g = ResNet([106, 106, 1], batch_size, learning_rate)
 
     sess = tf.Session()
 
