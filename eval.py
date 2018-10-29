@@ -16,7 +16,7 @@ if __name__ == '__main__':
     learning_rate = 1e-3
     batch_size = 32
     step_num = 10000
-    g = SR([106, 106, 1], batch_size, learning_rate)
+    g = ResNet([106, 106, 1], batch_size, learning_rate)
     data = sio.loadmat('expData')['seismic_h']
     sess = tf.Session()
 
