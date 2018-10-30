@@ -9,15 +9,16 @@ from tqdm import tqdm
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import scipy.io as sio
-from cnn_sr import *
+# from cnn_sr import *
+from srgan import *
 
 
 if __name__ == '__main__':
     learning_rate = 1e-3
     batch_size = 32
     step_num = 10000
-    g = ResNet([106, 106, 1], learning_rate)
-    data = sio.loadmat('TEST_exp')['TEST_exp']
+    g = SRGAN([106, 106, 1], learning_rate)
+    data = sio.loadmat('TEST_exp.mat')['TEST_exp']
     sess = tf.Session()
 
     init = tf.global_variables_initializer()
@@ -37,7 +38,7 @@ if __name__ == '__main__':
             seismic_l[:,:,i] = np.squeeze(zs)
             seismic_h[:,:,i] = np.squeeze(gs)
 
-        sio.savemat('cnn_sr.mat', {'seismic_cnn_l': seismic_l, 'seismic_cnn_h': seismic_h})
+        sio.savemat('gan_sr.mat', {'seismic_gan_l': seismic_l, 'seismic_gan_h': seismic_h})
 
     else:
         print('Trained model is not existed!')
