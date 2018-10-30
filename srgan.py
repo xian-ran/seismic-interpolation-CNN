@@ -1,15 +1,14 @@
 # -*- coding:utf-8 -*-
 # 
 # Author: YIN MIAO
-# Time: 2018/10/19 20:17
+# Time: 2018/10/29 16:43
 
 
 import numpy as np
-import os
-from tqdm import tqdm
 import tensorflow as tf
-import matplotlib.pyplot as plt
+from tqdm import tqdm
 import scipy.io as sio
+import os
 
 
 def lrelu(x, alpha=0.2):
@@ -43,77 +42,11 @@ def he_init(size, stride):
     return tf.random_uniform(shape=size, minval=minval, maxval=maxval)
 
 
-class ResNet(object):
-    def __init__(self, img_shape, learning_rate):
-        self.height = img_shape[0]
-        self.width = img_shape[1]
-        # self.learning_rate = learning_rate
-        self.channel_num = img_shape[2]
-        # self.vgg = VGG19(None, None, None)
+class Network(object):
+    def __init__(self):
         self.layer_num = 0
-
-        self.x = tf.placeholder(
-            tf.float32,
-            [None, self.height, self.width, self.channel_num],
-            name='x'
-        )
-        self.z = self.downscale(self.x, 2)
-        self.g = self.generator(self.z)
-        self.loss = self.reconstruction_loss(self.x, self.g)
-
-        self.opt = tf.train.AdamOptimizer(
-            learning_rate=learning_rate,
-            beta1=0.5,
-            beta2=0.9
-        ).minimize(self.loss)
-
-    def generator(self, z):
-        # Network.deconv2d(input, input_shape, output_dim, filter_size, stride)
-        h = tf.nn.relu(self.deconv2d(z, 64, 3, 1))
-        bypass = h
-
-        h = self.residual_block(h, 64, 3, 2)
-
-        h = self.deconv2d(h, 64, 3, 1)
-        h = self.batch_norm(h)
-        h = tf.add(h, bypass)
-
-        h = self.deconv2d(h, 256, 3, 1)
-        h = self.pixel_shuffle(h, 2, 64)
-        h = tf.nn.relu(h)
-
-        # h = self.deconv2d(h, 64, 3, 1)
-        # h = self.pixel_shuffle(h, 2, 16)
-        # h = tf.nn.relu(h)
-
-        h = self.deconv2d(h, self.channel_num, 3, 1)
-
-        return h
-
-    def downscale(self, x, K):
-        mat = np.zeros([K, K, self.channel_num, self.channel_num])
-        for i in range(self.channel_num):
-            mat[:, :, i, i] = 1.0 / K ** 2
-        filter = tf.constant(mat, dtype=tf.float32)
-        return tf.nn.conv2d(x, filter, strides=[1, K, K, 1], padding='SAME')
-
-    def vgg19_loss(self, x, g):
-        _, real_phi = self.vgg.build_model(x, tf.constant(False), False)
-        _, fake_phi = self.vgg.build_model(g, tf.constant(False), True)
-
-        loss = None
-        for i in range(len(real_phi)):
-            l2_loss = tf.nn.l2_loss(real_phi[i] - fake_phi[i])
-            if loss is None:
-                loss = l2_loss
-            else:
-                loss += l2_loss
-
-        return tf.reduce_mean(loss)
-
-    @staticmethod
-    def reconstruction_loss(x, g):
-        return tf.reduce_sum(tf.square(x - g))
+        self.weights = []
+        self.biases = []
 
     def conv2d(self, input, input_dim, output_dim, filter_size, stride, padding='SAME'):
         with tf.variable_scope('conv' + str(self.layer_num)):
@@ -137,6 +70,8 @@ class ResNet(object):
             ), bias)
 
             self.layer_num += 1
+            self.weights.append(weight)
+            self.biases.append(bias)
 
         return output
 
@@ -171,6 +106,8 @@ class ResNet(object):
                                 [tf.shape(input)[0], input_shape[1] * stride, input_shape[2] * stride, output_dim])
 
             self.layer_num += 1
+            self.weights.append(weight)
+            self.biases.append(bias)
 
         return output
 
@@ -196,6 +133,8 @@ class ResNet(object):
             output = tf.add(tf.matmul(input, weight), bias)
 
             self.layer_num += 1
+            self.weights.append(weight)
+            self.biases.append(bias)
 
         return output
 
@@ -230,38 +169,147 @@ class ResNet(object):
         xc = tf.concat([PS(x_, r) for x_ in xc], 3)
         return xc
 
-def show_result(xs, zs, gs, step):
-    zs = np.squeeze(zs)
-    xs = np.squeeze(xs)
-    gs = np.squeeze(gs)
-    fig = plt.figure(figsize=(5, 15))
 
-    #graph = gridspec.GridSpec(1, 3)
-    #graph.update(wspace=0.5, hspace=0.5)
+class SRGAN(object):
+    def __init__(self, img_shape, learning_rate):
+        self.img_shape = img_shape
+        self.LAMBDA = 10
+        self.SIGMA = 1e-3
+        self.G_params = []
+        self.D_params = []
 
-    ax = fig.add_subplot(131)
-    plt.axis('off')
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.set_aspect('equal')
-    plt.imshow(zs, cmap='Greys_r')
+        self.x = tf.placeholder(
+            tf.float32,
+            [None, self.img_shape[0], self.img_shape[1], self.img_shape[2]],
+            name='x'
+        )
+        self.z = self.downscale(self.x, 2)
 
-    ax = fig.add_subplot(132)
-    plt.axis('off')
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.set_aspect('equal')
-    plt.imshow(gs, cmap='Greys_r')
+        with tf.variable_scope('generator'):
+            self.g = self.generator(self.z)
+        with tf.variable_scope('discriminator') as scope:
+            self.D_real = self.discriminator(self.x)
+            scope.reuse_variables()
+            self.D_fake = self.discriminator(self.g)
 
-    ax = fig.add_subplot(133)
-    plt.axis('off')
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.set_aspect('equal')
-    plt.imshow(xs, cmap='Greys_r')
+        content_loss = self.reconstruction_loss(self.x, self.g)
 
-    plt.savefig('out/{}.png'.format(str(step).zfill(6)), bbox_inches='tight')
-    plt.close(fig)
+        disc_loss = -tf.reduce_mean(self.D_real) + tf.reduce_mean(self.D_fake)
+        gen_loss = -tf.reduce_mean(self.D_fake)
+
+        alpha = tf.random_uniform(
+            shape=(tf.shape(self.g)[0], 1),
+            minval=0.,
+            maxval=1.
+        )
+
+        x_ = tf.reshape(self.x, (-1, np.prod(self.img_shape)))
+        g_ = tf.reshape(self.g, (-1, np.prod(self.img_shape)))
+
+        differences = x_ - g_
+        interpolates = x_ + alpha * differences
+        interpolates = tf.reshape(interpolates, (-1, self.img_shape[0], self.img_shape[1], self.img_shape[2]))
+        gradients = tf.gradients(self.discriminator(interpolates), [interpolates])[0]
+        slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1]))
+        gradient_penalty = tf.reduce_mean((slopes - 1.) ** 2)
+
+        self.D_loss = self.SIGMA * (disc_loss + self.LAMBDA * gradient_penalty)
+
+        self.G_loss = content_loss + self.SIGMA * gen_loss
+
+        self.D_opt = tf.train.AdamOptimizer(
+            learning_rate=learning_rate,
+            beta1=0.5,
+            beta2=0.9
+        ).minimize(self.D_loss, var_list=self.D_params)
+        self.G_opt = tf.train.AdamOptimizer(
+            learning_rate=learning_rate,
+            beta1=0.5,
+            beta2=0.9
+        ).minimize(self.G_loss, var_list=self.G_params)
+
+    def generator(self, z):
+        G = Network()
+        # Network.deconv2d(input, input_shape, output_dim, filter_size, stride)
+        h = tf.nn.relu(G.deconv2d(z, 64, 3, 1))
+        bypass = h
+
+        h = G.residual_block(h, 64, 3, 2)
+
+        h = G.deconv2d(h, 64, 3, 1)
+        h = G.batch_norm(h)
+        h = tf.add(h, bypass)
+
+        h = G.deconv2d(h, 256, 3, 1)
+        h = G.pixel_shuffle(h, 2, 64)
+        h = tf.nn.relu(h)
+
+        # h = G.deconv2d(h, 64, 3, 1)
+        # h = G.pixel_shuffle(h, 2, 16)
+        # h = tf.nn.relu(h)
+
+        h = G.deconv2d(h, self.img_shape[2], 3, 1)
+
+        self.G_params = G.weights + G.biases
+
+        return h
+
+    def discriminator(self, x):
+        D = Network()
+        # Network.conv2d(input, output_dim, filter_size, stride, padding='SAME')
+        h = D.conv2d(x, self.img_shape[2], 32, 3, 1)
+        h = lrelu(h)
+
+        # h = D.conv2d(h, 64, 64, 3, 1)
+        # h = lrelu(h)
+        # h = D.batch_norm(h)
+
+        map_nums = [32, 64, 128]
+
+        for i in range(len(map_nums) - 1):
+            h = D.conv2d(h, map_nums[i], map_nums[i + 1], 3, 1)
+            h = lrelu(h)
+            h = D.batch_norm(h)
+
+            h = D.conv2d(h, map_nums[i + 1], map_nums[i + 1], 3, 2)
+            h = lrelu(h)
+            h = D.batch_norm(h)
+
+        h_shape = h.get_shape().as_list()
+        h = tf.reshape(h, [-1, h_shape[1] * h_shape[2] * h_shape[3]])
+        h = D.dense(h, 1024)
+        h = lrelu(h)
+
+        h = D.dense(h, 1)
+
+        self.D_params = D.weights + D.biases
+
+        return h
+
+    def downscale(self, x, K):
+        mat = np.zeros([K, K, self.img_shape[2], self.img_shape[2]])
+        for i in range(self.img_shape[2]):
+            mat[:, :, i, i] = 1.0 / K ** 2
+        filter = tf.constant(mat, dtype=tf.float32)
+        return tf.nn.conv2d(x, filter, strides=[1, K, K, 1], padding='SAME')
+
+    def vgg19_loss(self, x, g):
+        _, real_phi = self.vgg.build_model(x, tf.constant(False), False)
+        _, fake_phi = self.vgg.build_model(g, tf.constant(False), True)
+
+        loss = None
+        for i in range(len(real_phi)):
+            l2_loss = tf.nn.l2_loss(real_phi[i] - fake_phi[i])
+            if loss is None:
+                loss = l2_loss
+            else:
+                loss += l2_loss
+
+        return tf.reduce_mean(loss)
+
+    @staticmethod
+    def reconstruction_loss(x, g):
+        return tf.reduce_sum(tf.square(x - g))
 
 
 def sample_data(batch_size, sample_shape, data):
@@ -281,9 +329,9 @@ if __name__ == '__main__':
     batch_size = 32
     step_num = 10000
 
-    data = sio.loadmat('volume.mat')['volume']
+    data = sio.loadmat('Vol.mat')['M']
 
-    g = ResNet([106, 106, 1], learning_rate)
+    g = SRGAN([106, 106, 1], learning_rate)
 
     sess = tf.Session()
 
@@ -297,12 +345,17 @@ if __name__ == '__main__':
     saver = tf.train.Saver()
 
     for step in tqdm(range(step_num), total=step_num, ncols=70, leave=False, unit='b'):
+        for _ in range(5):
+            xs = sample_data(batch_size, (106, 106), data)
+            xs = np.expand_dims(xs, axis=-1)
+            _, dl = sess.run([g.D_opt, g.D_loss], feed_dict={g.x: xs})
+
         xs = sample_data(batch_size, (106, 106), data)
         xs = np.expand_dims(xs, axis=-1)
-        _, l = sess.run([g.opt, g.loss], feed_dict={g.x: xs})
+        _, gl = sess.run([g.G_opt, g.G_loss], feed_dict={g.x:xs})
 
         if step % 100 == 0:
-            print('step: {}, loss: {}'.format(step, l))
+            print('step: {}, D_loss: {}, G_loss:{}'.format(step, dl, gl))
             # zs, gs = sess.run([g.z, g.g], feed_dict={g.x: xs})
             # show_result(xs[0], zs[0], gs[0], step)
         if step % 1000 == 0:
